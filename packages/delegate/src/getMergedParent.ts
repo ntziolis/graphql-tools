@@ -34,7 +34,7 @@ export async function getMergedParent(
     loader = new DataLoader(infos => getMergedParentsFromInfos(parent, context, infos));
     loaders.set(parent, loader);
   }
-  return await loader.load(info);
+  return loader.load(info);
 }
 
 async function getMergedParentsFromInfos(
