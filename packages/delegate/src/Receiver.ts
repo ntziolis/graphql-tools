@@ -13,15 +13,15 @@ import {
 
 import DataLoader from 'dataloader';
 
-import { Repeater } from '@repeaterjs/repeater';
+import { Repeater, Stop } from '@repeaterjs/repeater';
 
 import { AsyncExecutionResult } from '@graphql-tools/utils';
-import { InMemoryPubSub } from '@graphql-tools/pubsub';
 
 import { DelegationContext, ExternalObject } from './types';
 import { getReceiver, getSubschema, getUnpathedErrors, mergeExternalObjects } from './externalObjects';
 import { resolveExternalValue } from './resolveExternalValue';
 import { externalValueFromResult, externalValueFromPatchResult } from './externalValues';
+import { ExpectantStore } from './expectantStore';
 
 export class Receiver {
   private readonly asyncIterable: AsyncIterable<AsyncExecutionResult>;
@@ -31,10 +31,10 @@ export class Receiver {
   private readonly asyncSelectionSets: Record<string, SelectionSetNode>;
   private readonly resultTransformer: (originalResult: ExecutionResult) => any;
   private readonly initialResultDepth: number;
-  private readonly pubsub: InMemoryPubSub<ExternalObject>;
   private deferredPatches: Record<string, Array<ExecutionPatchResult>>;
   private streamedPatches: Record<string, Record<number, Array<ExecutionPatchResult>>>;
-  private cache: Record<string, any>;
+  private cache: ExpectantStore<ExternalObject>;
+  private stoppers: Array<Stop>;
   private loaders: Record<string, DataLoader<GraphQLResolveInfo, any>>;
   private infos: Record<string, Record<string, GraphQLResolveInfo>>;
 
@@ -54,11 +54,11 @@ export class Receiver {
 
     this.resultTransformer = resultTransformer;
     this.initialResultDepth = info ? responsePathAsArray(info.path).length - 1 : 0;
-    this.pubsub = new InMemoryPubSub();
 
     this.deferredPatches = Object.create(null);
     this.streamedPatches = Object.create(null);
-    this.cache = Object.create(null);
+    this.cache = new ExpectantStore();
+    this.stoppers = [];
     this.loaders = Object.create(null);
     this.infos = Object.create(null);
   }
@@ -67,7 +67,7 @@ export class Receiver {
     const asyncIterator = this.asyncIterable[Symbol.asyncIterator]();
     const payload = await asyncIterator.next();
     const initialResult = externalValueFromResult(this.resultTransformer(payload.value), this.delegationContext, this);
-    this.cache[this.fieldName] = initialResult;
+    this.cache.set(this.fieldName, initialResult);
 
     this._iterate();
 
@@ -110,73 +110,52 @@ export class Receiver {
       this.onNewInfo(pathKey, combinedInfo);
     }
 
-    const parent = this.cache[parentKey];
-    if (parent !== undefined) {
-      const data = parent[responseKey];
-      if (data !== undefined) {
-        const unpathedErrors = getUnpathedErrors(parent);
-        const subschema = getSubschema(parent, responseKey);
-        const receiver = getReceiver(parent, subschema);
-        this.onNewExternalValue(
-          pathKey,
-          resolveExternalValue(data, unpathedErrors, subschema, this.context, combinedInfo, receiver),
-          isCompositeType(getNamedType(combinedInfo.returnType))
-            ? {
-                kind: Kind.SELECTION_SET,
-                selections: [].concat(...combinedInfo.fieldNodes.map(fieldNode => fieldNode.selectionSet.selections)),
-              }
-            : undefined
-        );
-      }
+    const parent = await this.cache.request(parentKey);
+
+    const data = parent[responseKey];
+    if (data !== undefined) {
+      const unpathedErrors = getUnpathedErrors(parent);
+      const subschema = getSubschema(parent, responseKey);
+      const receiver = getReceiver(parent, subschema);
+      this.onNewExternalValue(
+        pathKey,
+        resolveExternalValue(data, unpathedErrors, subschema, this.context, combinedInfo, receiver),
+        isCompositeType(getNamedType(combinedInfo.returnType))
+          ? {
+              kind: Kind.SELECTION_SET,
+              selections: [].concat(...combinedInfo.fieldNodes.map(fieldNode => fieldNode.selectionSet.selections)),
+            }
+          : undefined
+      );
     }
 
     if (fieldShouldStream(combinedInfo)) {
       return infos.map(
         () =>
           new Repeater(async (push, stop) => {
-            let initialValues: Array<any> = this.cache[pathKey];
-            if (initialValues !== undefined) {
-              initialValues.forEach(async value => push(value));
-            } else {
-              const payload = await this.pubsub.subscribe(pathKey).next();
-              initialValues = payload.value;
-              if (initialValues === undefined) {
-                return;
-              }
-            }
+            const initialValues = ((await this.cache.request(pathKey)) as unknown) as Array<ExternalObject>;
+            initialValues.forEach(async value => push(value));
 
             let index = initialValues.length;
-            while (true) {
-              const listMemberKey = `${pathKey}.${index++}`;
 
-              let listMember = this.cache[listMemberKey];
-              if (listMember !== undefined) {
-                await push(listMember);
-                continue;
-              }
+            let stopped = false;
+            stop.then(() => (stopped = true));
 
-              const listMemberPayload = await this.pubsub.subscribe(listMemberKey).next();
-              listMember = listMemberPayload.value;
-              if (listMember === undefined) {
-                break;
-              }
+            this.stoppers.push(stop);
 
-              await push(listMember);
+            const next = () => this.cache.request(`${pathKey}.${index++}`);
+
+            /* eslint-disable no-unmodified-loop-condition */
+            while (!stopped) {
+              await push(next());
             }
-
-            stop();
+            /* eslint-disable no-unmodified-loop-condition */
           })
       );
     }
 
-    const externalValue = this.cache[pathKey];
-    if (externalValue !== undefined) {
-      return new Array(infos.length).fill(externalValue);
-    }
-
-    const payload = await this.pubsub.subscribe(pathKey).next();
-
-    return new Array(infos.length).fill(payload.value);
+    const externalValue = await this.cache.request(pathKey);
+    return new Array(infos.length).fill(externalValue);
   }
 
   private async _iterate(): Promise<void> {
@@ -266,13 +245,15 @@ export class Receiver {
     }
 
     setTimeout(() => {
-      this.pubsub.close();
+      this.cache.clear();
+      this.stoppers.forEach(stop => stop());
     });
   }
 
   private onNewExternalValue(pathKey: string, newExternalValue: any, selectionSet: SelectionSetNode): void {
-    const externalValue = this.cache[pathKey];
-    this.cache[pathKey] =
+    const externalValue = this.cache.get(pathKey);
+    this.cache.set(
+      pathKey,
       externalValue === undefined
         ? newExternalValue
         : mergeExternalObjects(
@@ -282,7 +263,8 @@ export class Receiver {
             externalValue,
             [newExternalValue],
             [selectionSet]
-          );
+          )
+    );
 
     const infosByParentKey = this.infos[pathKey];
     if (infosByParentKey !== undefined) {
@@ -309,7 +291,7 @@ export class Receiver {
       });
     }
 
-    this.pubsub.publish(pathKey, newExternalValue);
+    this.cache.set(pathKey, newExternalValue);
   }
 
   private onNewInfo(pathKey: string, info: GraphQLResolveInfo): void {

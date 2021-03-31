@@ -4,7 +4,7 @@
 
 import { Push, Repeater } from '@repeaterjs/repeater';
 
-import { Splitter } from './types';
+type Splitter<T> = (item: T) => [number, T];
 
 export function split<T>(asyncIterable: AsyncIterableIterator<T>, n: number, splitter: Splitter<IteratorResult<T>>) {
   const iterator = asyncIterable[Symbol.asyncIterator]();
