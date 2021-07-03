@@ -1,5 +1,33 @@
 # @graphql-tools/links
 
+## 8.0.0
+
+### Major Changes
+
+- c0ca3190: BREAKING CHANGE
+  - Remove Subscriber and use only Executor
+  - - Now `Executor` can receive `AsyncIterable` and subscriptions will also be handled by `Executor`. This is a future-proof change for defer, stream and live queries
+
+### Minor Changes
+
+- 7d3e3006: feat(links): Respect operationName
+
+### Patch Changes
+
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [aa43054d]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [c0ca3190]
+- Updated dependencies [982c8f53]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+  - @graphql-tools/delegate@8.0.0
+  - @graphql-tools/utils@8.0.0
+
 ## 7.1.0
 
 ### Minor Changes

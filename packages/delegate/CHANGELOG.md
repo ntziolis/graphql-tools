@@ -1,5 +1,45 @@
 # @graphql-tools/delegate
 
+## 8.0.0
+
+### Major Changes
+
+- 7d3e3006: BREAKING CHANGE
+  - Remove `rootValue` from subschemaConfig
+  - - Pass it through `ExecutionParams` or delegation options
+  - Do not pass `info.rootValue` if `rootValue` is falsy
+- 7d3e3006: BREAKING CHANGE
+  - Now it uses the native [`AggregateError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) implementation. The major difference is the individual errors are kept under `errors` property instead of the object itself with `Symbol.iterator`.
+  ```js
+  // From;
+  for (const error of aggregateError)
+  // To;
+  for (const error of aggregateError.errors)
+  ```
+- aa43054d: BREAKING CHANGE: validations are skipped by default, use validateRequest: true to reenable
+- c0ca3190: BREAKING CHANGE
+  - Remove Subscriber and use only Executor
+  - - Now `Executor` can receive `AsyncIterable` and subscriptions will also be handled by `Executor`. This is a future-proof change for defer, stream and live queries
+
+### Patch Changes
+
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [c0ca3190]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [982c8f53]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+  - @graphql-tools/utils@8.0.0
+  - @graphql-tools/schema@8.0.0
+  - @graphql-tools/batch-execute@8.0.0
+
 ## 7.1.5
 
 ### Patch Changes

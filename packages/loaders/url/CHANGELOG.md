@@ -1,5 +1,48 @@
 # @graphql-tools/url-loader
 
+## 7.0.0
+
+### Major Changes
+
+- 614c08cc: BREAKING CHANGE
+  - Remove `handleSDLAsync` and `handleSDLSync`; use `handleSDL` instead
+  - Remove `useSSEForSubscription` and `useWebSocketLegacyProtocol`; use `subscriptionProtocol` instead
+  - If introspection source is different than endpoint, use `endpoint` for remote execution source
+  - Default HTTP Executor is renamed to `buildHTTPExecutor` with a new signature
+  - `build*Subscriber` methods are renamed to `buildWSLegacyExecutor`, `buildWSExecutor` and `buildSSEExecutor` with new signatures
+  - `getFetch` no longer takes `async` flag
+- c0ca3190: BREAKING CHANGE
+  - Remove Subscriber and use only Executor
+  - - Now `Executor` can receive `AsyncIterable` and subscriptions will also be handled by `Executor`. This is a future-proof change for defer, stream and live queries
+- 7d3e3006: BREAKING CHANGE
+
+  - No more accept arrays or functions for `headers`
+
+  NEW FEATURES
+
+  - Respect `operationName` and `extensions`
+  - Ability to get headers from `extensions.headers`
+
+### Patch Changes
+
+- a31f9593: enhance(url-loader): avoid doing extra work on loader level
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [c0ca3190]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [aa43054d]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [c0ca3190]
+- Updated dependencies [982c8f53]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+  - @graphql-tools/delegate@8.0.0
+  - @graphql-tools/wrap@8.0.0
+  - @graphql-tools/utils@8.0.0
+
 ## 6.10.1
 
 ### Patch Changes

@@ -1,5 +1,25 @@
 # @graphql-tools/graphql-tag-pluck
 
+## 7.0.0
+
+### Major Changes
+
+- 34c31de0: BREAKING CHANGE
+  - feat(graphql-tag-pluck): keep locationOffset and return graphql-js Source instead of string
+
+### Patch Changes
+
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [c0ca3190]
+- Updated dependencies [982c8f53]
+- Updated dependencies [7d3e3006]
+- Updated dependencies [7d3e3006]
+  - @graphql-tools/utils@8.0.0
+
 ## 6.5.1
 
 ### Patch Changes
