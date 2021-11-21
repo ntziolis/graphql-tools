@@ -1,35 +1,29 @@
-import {
-  GraphQLSchema,
-  GraphQLObjectType,
-  getNullableType,
-  FieldNode,
-  Kind,
-  GraphQLError,
-  GraphQLArgument,
-  GraphQLFieldResolver,
-  OperationTypeNode,
-  isListType,
-  isWrappingType,
-  isNonNullType,
-  ListTypeNode,
-  ListValueNode,
-  GraphQLList,
-  GraphQLOutputType,
-  GraphQLNonNull,
-} from 'graphql';
-
+import { defaultMergedResolver, DelegationContext, SubschemaConfig, Transform } from '@graphql-tools/delegate';
 import {
   appendObjectFields,
-  removeObjectFields,
   ExecutionRequest,
   ExecutionResult,
   relocatedError,
+  removeObjectFields,
 } from '@graphql-tools/utils';
-
-import { Transform, defaultMergedResolver, DelegationContext, SubschemaConfig } from '@graphql-tools/delegate';
+import {
+  FieldNode,
+  getNullableType,
+  GraphQLArgument,
+  GraphQLError,
+  GraphQLFieldResolver,
+  GraphQLList,
+  GraphQLNonNull,
+  GraphQLObjectType,
+  GraphQLOutputType,
+  GraphQLSchema,
+  isListType,
+  isNonNullType,
+  Kind,
+  OperationTypeNode,
+} from 'graphql';
 
 import { defaultCreateProxyingResolver } from '../generateProxyingResolvers';
-
 import MapFields from './MapFields';
 
 export default class HoistField implements Transform {
@@ -40,8 +34,6 @@ export default class HoistField implements Transform {
   private readonly argFilters: Array<(arg: GraphQLArgument) => boolean>;
   private readonly argLevels: Record<string, number>;
   private readonly transformer: MapFields<any>;
-
-  private listWrapFns!: ((type: GraphQLOutputType) => GraphQLOutputType)[];
 
   constructor(
     typeName: string,
@@ -74,21 +66,11 @@ export default class HoistField implements Transform {
       {
         [typeName]: {
           [newFieldName]: fieldNode =>
-            this.wrapFieldNode(
-              renameFieldNode(fieldNode, oldFieldName, this.listWrapFns.length ? alias : undefined),
-              pathToField,
-              alias,
-              argLevels
-            ),
+            this.wrapFieldNode(renameFieldNode(fieldNode, oldFieldName), pathToField, alias, argLevels),
         },
       },
       {
-        [typeName]: value => {
-          if (this.listWrapFns.length) {
-            return unwrapArrayValue(value, alias, newFieldName);
-          }
-          return unwrapValue(value, alias);
-        },
+        [typeName]: value => unwrapValue(value, alias, newFieldName),
       },
       errors => (errors != null ? unwrapErrors(errors, alias) : undefined)
     );
@@ -101,7 +83,7 @@ export default class HoistField implements Transform {
     transformedSchema?: GraphQLSchema
   ): GraphQLSchema {
     const argsMap: Record<string, GraphQLArgument> = Object.create(null);
-    this.listWrapFns = [];
+    const listWrapFns: ((type: GraphQLOutputType) => GraphQLOutputType)[] = [];
     const innerType: GraphQLObjectType = this.pathToField.reduce((acc, pathSegment, index) => {
       const field = acc.getFields()[pathSegment];
       for (const arg of field.args) {
@@ -111,16 +93,14 @@ export default class HoistField implements Transform {
         }
       }
 
-      if (isWrappingType(field.type)) {
-        if (isListType(field.type)) {
-          this.listWrapFns.push(type => new GraphQLList(type));
-          return getNullableType(field.type.ofType) as GraphQLObjectType;
-        }
+      if (isListType(field.type)) {
+        listWrapFns.push(type => new GraphQLList(type));
+        return getNullableType(field.type.ofType) as GraphQLObjectType;
+      }
 
-        if (isListType(field.type.ofType)) {
-          this.listWrapFns.push(type => new GraphQLNonNull(new GraphQLList(type)));
-          return getNullableType(field.type.ofType.ofType) as GraphQLObjectType;
-        }
+      if (isNonNullType(field.type) && isListType(field.type.ofType)) {
+        listWrapFns.push(type => new GraphQLNonNull(new GraphQLList(type)));
+        return getNullableType(field.type.ofType.ofType) as GraphQLObjectType;
       }
 
       return getNullableType(field.type) as GraphQLObjectType;
@@ -155,7 +135,7 @@ export default class HoistField implements Transform {
       }
     }
 
-    const newTargetField = this.listWrapFns.reduceRight(
+    const newTargetField = listWrapFns.reduceRight(
       (acc, wrapFn) => {
         return {
           ...acc,
@@ -218,7 +198,7 @@ export default class HoistField implements Transform {
   }
 
   private wrapFieldNode(fieldNode: FieldNode, path: Array<string>, alias: string, argLevels: Record<string, number>) {
-    return wrapFieldNode(fieldNode, path, alias, argLevels); //, this.pathLevelIsList);
+    return wrapFieldNode(fieldNode, path, alias, argLevels);
   }
 }
 
@@ -227,7 +207,6 @@ export function wrapFieldNode(
   path: Array<string>,
   alias: string,
   argLevels: Record<string, number>
-  // pathLevelIsList: Array<boolean>
 ): FieldNode {
   const wrappedFieldNode: FieldNode = path.reduceRight(
     (acc, fieldName, index) => {
@@ -263,12 +242,12 @@ export function wrapFieldNode(
   return wrappedFieldNode;
 }
 
-export function renameFieldNode(fieldNode: FieldNode, name: string, alias?: string): FieldNode {
+export function renameFieldNode(fieldNode: FieldNode, name: string): FieldNode {
   return {
     ...fieldNode,
     alias: {
       kind: Kind.NAME,
-      value: alias || fieldNode.alias?.value || fieldNode.name.value,
+      value: fieldNode.alias?.value || fieldNode.name.value,
     },
     name: {
       kind: Kind.NAME,
@@ -277,42 +256,7 @@ export function renameFieldNode(fieldNode: FieldNode, name: string, alias?: stri
   };
 }
 
-export function unwrapValueOld(originalValue: any, alias: string): any {
-  let newValue = originalValue;
-
-  let object = newValue[alias];
-
-  if (Array.isArray(object)) {
-    newValue = {
-      queryList: object.map(item => {
-        let newValueItem = item;
-        while (item != null) {
-          newValueItem = item;
-          item = newValueItem[alias];
-        }
-
-        return newValueItem;
-      }),
-    };
-
-    delete originalValue[alias];
-    Object.assign(originalValue, newValue);
-
-    return originalValue;
-  }
-
-  while (object != null) {
-    newValue = object;
-    object = newValue[alias];
-  }
-
-  delete originalValue[alias];
-  Object.assign(originalValue, newValue);
-
-  return originalValue;
-}
-
-export function unwrapValueSimple(originalValue: any, alias: string, fieldName: string): any {
+export function unwrapValue(originalValue: any, alias: string, fieldName: string): any {
   let newValue = originalValue;
 
   let object = newValue[alias];
@@ -331,59 +275,17 @@ export function unwrapValueSimple(originalValue: any, alias: string, fieldName: 
         return newValueItem;
       }),
     };
-
-    delete originalValue[alias];
-    Object.assign(originalValue, newValue);
-
-    return originalValue;
-  }
-
-  while (object != null) {
-    newValue = object;
-    object = newValue[alias];
+  } else {
+    while (object != null) {
+      newValue = object;
+      object = newValue[alias];
+    }
   }
 
   delete originalValue[alias];
   Object.assign(originalValue, newValue);
 
   return originalValue;
-}
-
-export function unwrapValue(originalValue: any, alias: string): any {
-  let newValue = originalValue;
-
-  let object = newValue[alias];
-
-  if (Array.isArray(object)) {
-    const arrayValue = object.map(item => unwrapValue(item, alias));
-    return arrayValue;
-  }
-
-  while (object != null) {
-    newValue = object;
-    object = newValue[alias];
-  }
-
-  if (typeof newValue !== 'object') {
-    return newValue;
-  }
-
-  delete originalValue[alias];
-  Object.assign(originalValue, newValue);
-
-  return originalValue;
-}
-
-export function unwrapArrayValue(originalValue: any, alias: string, fieldName: string): any {
-  let newValue = originalValue[alias];
-
-  if (newValue && Array.isArray(newValue)) {
-    newValue = newValue.map(item => unwrapValue(item, alias));
-  }
-
-  return {
-    [fieldName as string]: newValue,
-  };
 }
 
 function unwrapErrors(errors: ReadonlyArray<GraphQLError> | undefined, alias: string): Array<GraphQLError> | undefined {
