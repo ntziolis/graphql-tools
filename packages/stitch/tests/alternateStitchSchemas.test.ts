@@ -1146,6 +1146,7 @@ describe('HoistField transform', () => {
     typeDefs: /* GraphQL */ `
       type Query {
         query: Outer
+        queryList: [InnerListItem!]!
       }
       type Outer {
         inner(innerArg: String): Inner
@@ -1153,15 +1154,22 @@ describe('HoistField transform', () => {
       type Inner {
         test(testArg: String = "test"): String
       }
+      type InnerListItem {
+        test(testArg: String = "test"): String
+      }
     `,
     resolvers: {
       Query: {
         query: () => ({ inner: {} }),
+        queryList: () => [{}, {}, {}],
       },
       Outer: {
         inner: (_parent, args) => ({ innerArg: args.innerArg }),
       },
       Inner: {
+        test: (parent, args) => parent.innerArg ?? args.testArg,
+      },
+      InnerListItem: {
         test: (parent, args) => parent.innerArg ?? args.testArg,
       },
     },
@@ -1277,6 +1285,25 @@ describe('HoistField transform', () => {
     const expectedResult = {
       data: {
         query: 'test',
+      },
+    };
+
+    expect(result).toEqual(expectedResult);
+  });
+
+  test('should work to hoist fields with list in path', async () => {
+    const wrappedSchema = wrapSchema({
+      schema,
+      transforms: [new HoistField('Query', ['queryList', 'test'], 'queryList'), new PruneSchema({})],
+    });
+
+    expect(printSchema(wrappedSchema)).toMatchSnapshot();
+
+    const result = await graphql({ schema: wrappedSchema, source: '{ queryList }' });
+
+    const expectedResult = {
+      data: {
+        queryList: ['test', 'test', 'test'],
       },
     };
 
