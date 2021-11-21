@@ -1230,6 +1230,25 @@ describe('HoistField transform', () => {
     expect(result).toEqual(expectedResult);
   });
 
+  test('should work to hoist fields to existing fields (replace)', async () => {
+    const wrappedSchema = wrapSchema({
+      schema,
+      transforms: [new HoistField('Outer', ['inner', 'test'], 'inner'), new PruneSchema({})],
+    });
+
+    const result = await graphql({ schema: wrappedSchema, source: '{ query { inner } }' });
+
+    const expectedResult = {
+      data: {
+        query: {
+          inner: 'test',
+        },
+      },
+    };
+
+    expect(result).toEqual(expectedResult);
+  });
+
   test('should work to hoist fields to new root fields', async () => {
     const wrappedSchema = wrapSchema({
       schema,
@@ -1241,6 +1260,23 @@ describe('HoistField transform', () => {
     const expectedResult = {
       data: {
         hoisted: 'test',
+      },
+    };
+
+    expect(result).toEqual(expectedResult);
+  });
+
+  test('should work to hoist fields to existing root fields (replace)', async () => {
+    const wrappedSchema = wrapSchema({
+      schema,
+      transforms: [new HoistField('Query', ['query', 'inner', 'test'], 'query'), new PruneSchema({})],
+    });
+
+    const result = await graphql({ schema: wrappedSchema, source: '{ query }' });
+
+    const expectedResult = {
+      data: {
+        query: 'test',
       },
     };
 
