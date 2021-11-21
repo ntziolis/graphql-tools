@@ -1292,6 +1292,8 @@ describe('HoistField transform', () => {
   });
 
   test('should work to hoist fields with list in path', async () => {
+    // expect(schema.getQueryType()?.getFields()).toMatchSnapshot();
+
     const wrappedSchema = wrapSchema({
       schema,
       transforms: [new HoistField('Query', ['queryList', 'test'], 'queryList'), new PruneSchema({})],

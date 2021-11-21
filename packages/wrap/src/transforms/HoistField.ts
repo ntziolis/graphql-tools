@@ -8,6 +8,14 @@ import {
   GraphQLArgument,
   GraphQLFieldResolver,
   OperationTypeNode,
+  isListType,
+  isWrappingType,
+  isNonNullType,
+  ListTypeNode,
+  ListValueNode,
+  GraphQLList,
+  GraphQLOutputType,
+  GraphQLNonNull,
 } from 'graphql';
 
 import {
@@ -32,6 +40,8 @@ export default class HoistField implements Transform {
   private readonly argFilters: Array<(arg: GraphQLArgument) => boolean>;
   private readonly argLevels: Record<string, number>;
   private readonly transformer: MapFields<any>;
+
+  private listWrapFns!: ((type: GraphQLOutputType) => GraphQLOutputType)[];
 
   constructor(
     typeName: string,
@@ -64,11 +74,21 @@ export default class HoistField implements Transform {
       {
         [typeName]: {
           [newFieldName]: fieldNode =>
-            wrapFieldNode(renameFieldNode(fieldNode, oldFieldName), pathToField, alias, argLevels),
+            this.wrapFieldNode(
+              renameFieldNode(fieldNode, oldFieldName, this.listWrapFns.length ? alias : undefined),
+              pathToField,
+              alias,
+              argLevels
+            ),
         },
       },
       {
-        [typeName]: value => unwrapValue(value, alias),
+        [typeName]: value => {
+          if (this.listWrapFns.length) {
+            return unwrapArrayValue(value, alias, newFieldName);
+          }
+          return unwrapValue(value, alias);
+        },
       },
       errors => (errors != null ? unwrapErrors(errors, alias) : undefined)
     );
@@ -81,6 +101,7 @@ export default class HoistField implements Transform {
     transformedSchema?: GraphQLSchema
   ): GraphQLSchema {
     const argsMap: Record<string, GraphQLArgument> = Object.create(null);
+    this.listWrapFns = [];
     const innerType: GraphQLObjectType = this.pathToField.reduce((acc, pathSegment, index) => {
       const field = acc.getFields()[pathSegment];
       for (const arg of field.args) {
@@ -89,6 +110,19 @@ export default class HoistField implements Transform {
           this.argLevels[arg.name] = index;
         }
       }
+
+      if (isWrappingType(field.type)) {
+        if (isListType(field.type)) {
+          this.listWrapFns.push(type => new GraphQLList(type));
+          return getNullableType(field.type.ofType) as GraphQLObjectType;
+        }
+
+        if (isListType(field.type.ofType)) {
+          this.listWrapFns.push(type => new GraphQLNonNull(new GraphQLList(type)));
+          return getNullableType(field.type.ofType.ofType) as GraphQLObjectType;
+        }
+      }
+
       return getNullableType(field.type) as GraphQLObjectType;
     }, originalWrappingSchema.getType(this.typeName) as GraphQLObjectType);
 
@@ -121,10 +155,18 @@ export default class HoistField implements Transform {
       }
     }
 
-    const newTargetField = {
-      ...targetField,
-      resolve: resolve!,
-    };
+    const newTargetField = this.listWrapFns.reduceRight(
+      (acc, wrapFn) => {
+        return {
+          ...acc,
+          type: wrapFn(acc.type),
+        };
+      },
+      {
+        ...targetField,
+        resolve: resolve!,
+      }
+    );
 
     const level = this.pathToField.length;
 
@@ -174,6 +216,10 @@ export default class HoistField implements Transform {
   ): ExecutionResult {
     return this.transformer.transformResult(originalResult, delegationContext, transformationContext);
   }
+
+  private wrapFieldNode(fieldNode: FieldNode, path: Array<string>, alias: string, argLevels: Record<string, number>) {
+    return wrapFieldNode(fieldNode, path, alias, argLevels); //, this.pathLevelIsList);
+  }
 }
 
 export function wrapFieldNode(
@@ -181,27 +227,30 @@ export function wrapFieldNode(
   path: Array<string>,
   alias: string,
   argLevels: Record<string, number>
+  // pathLevelIsList: Array<boolean>
 ): FieldNode {
-  return path.reduceRight(
-    (acc, fieldName, index) => ({
-      kind: Kind.FIELD,
-      alias: {
-        kind: Kind.NAME,
-        value: alias,
-      },
-      name: {
-        kind: Kind.NAME,
-        value: fieldName,
-      },
-      selectionSet: {
-        kind: Kind.SELECTION_SET,
-        selections: [acc],
-      },
-      arguments:
-        fieldNode.arguments != null
-          ? fieldNode.arguments.filter(arg => argLevels[arg.name.value] === index)
-          : undefined,
-    }),
+  const wrappedFieldNode: FieldNode = path.reduceRight(
+    (acc, fieldName, index) => {
+      return {
+        kind: Kind.FIELD,
+        alias: {
+          kind: Kind.NAME,
+          value: alias,
+        },
+        name: {
+          kind: Kind.NAME,
+          value: fieldName,
+        },
+        selectionSet: {
+          kind: Kind.SELECTION_SET,
+          selections: [acc],
+        },
+        arguments:
+          fieldNode.arguments != null
+            ? fieldNode.arguments.filter(arg => argLevels[arg.name.value] === index)
+            : undefined,
+      };
+    },
     {
       ...fieldNode,
       arguments:
@@ -210,14 +259,16 @@ export function wrapFieldNode(
           : undefined,
     }
   );
+
+  return wrappedFieldNode;
 }
 
-export function renameFieldNode(fieldNode: FieldNode, name: string): FieldNode {
+export function renameFieldNode(fieldNode: FieldNode, name: string, alias?: string): FieldNode {
   return {
     ...fieldNode,
     alias: {
       kind: Kind.NAME,
-      value: fieldNode.alias != null ? fieldNode.alias.value : fieldNode.name.value,
+      value: alias || fieldNode.alias?.value || fieldNode.name.value,
     },
     name: {
       kind: Kind.NAME,
@@ -226,10 +277,30 @@ export function renameFieldNode(fieldNode: FieldNode, name: string): FieldNode {
   };
 }
 
-export function unwrapValue(originalValue: any, alias: string): any {
+export function unwrapValueOld(originalValue: any, alias: string): any {
   let newValue = originalValue;
 
   let object = newValue[alias];
+
+  if (Array.isArray(object)) {
+    newValue = {
+      queryList: object.map(item => {
+        let newValueItem = item;
+        while (item != null) {
+          newValueItem = item;
+          item = newValueItem[alias];
+        }
+
+        return newValueItem;
+      }),
+    };
+
+    delete originalValue[alias];
+    Object.assign(originalValue, newValue);
+
+    return originalValue;
+  }
+
   while (object != null) {
     newValue = object;
     object = newValue[alias];
@@ -239,6 +310,80 @@ export function unwrapValue(originalValue: any, alias: string): any {
   Object.assign(originalValue, newValue);
 
   return originalValue;
+}
+
+export function unwrapValueSimple(originalValue: any, alias: string, fieldName: string): any {
+  let newValue = originalValue;
+
+  let object = newValue[alias];
+
+  if (Array.isArray(object)) {
+    newValue = {
+      [fieldName]: object.map(item => {
+        let newValueItem = item;
+        while (item != null) {
+          newValueItem = item;
+          item = newValueItem[alias];
+        }
+
+        newValueItem = newValueItem[fieldName];
+
+        return newValueItem;
+      }),
+    };
+
+    delete originalValue[alias];
+    Object.assign(originalValue, newValue);
+
+    return originalValue;
+  }
+
+  while (object != null) {
+    newValue = object;
+    object = newValue[alias];
+  }
+
+  delete originalValue[alias];
+  Object.assign(originalValue, newValue);
+
+  return originalValue;
+}
+
+export function unwrapValue(originalValue: any, alias: string): any {
+  let newValue = originalValue;
+
+  let object = newValue[alias];
+
+  if (Array.isArray(object)) {
+    const arrayValue = object.map(item => unwrapValue(item, alias));
+    return arrayValue;
+  }
+
+  while (object != null) {
+    newValue = object;
+    object = newValue[alias];
+  }
+
+  if (typeof newValue !== 'object') {
+    return newValue;
+  }
+
+  delete originalValue[alias];
+  Object.assign(originalValue, newValue);
+
+  return originalValue;
+}
+
+export function unwrapArrayValue(originalValue: any, alias: string, fieldName: string): any {
+  let newValue = originalValue[alias];
+
+  if (newValue && Array.isArray(newValue)) {
+    newValue = newValue.map(item => unwrapValue(item, alias));
+  }
+
+  return {
+    [fieldName as string]: newValue,
+  };
 }
 
 function unwrapErrors(errors: ReadonlyArray<GraphQLError> | undefined, alias: string): Array<GraphQLError> | undefined {
